@@ -1,0 +1,9 @@
+# 智审云 依赖环境清单
+# 安装：pip install -r requirements.txt
+# 运行：streamlit run website.py
+
+streamlit==1.62.0
+pandas==3.0.5
+numpy==2.5.2
+altair==6.2.2
+openpyxl==3.1.5
