@@ -37,9 +37,10 @@ def standardize_columns(df):
     return df, filled
 
 
-from risk_score import compute_quantiles, score_shop
-from risk_level import judge_level, LEVEL_INFO
+from risk_score import compute_quantiles, score_shop, FULL_SCORE
+from risk_level import judge_level_full, LEVEL_INFO
 from reason_engine import build_reason_text, build_hit_summary
+from risk_rules import RULE_MAP
 
 st.set_page_config(page_title="智审云", page_icon="📊")
 st.title("小微企业智能财务风险识别与预警系统")
@@ -58,19 +59,44 @@ else:
 # ---- 以下为分析主流程（无论上传与否都执行）----
 df, filled = standardize_columns(df)
 if filled:
-    st.warning(f"已自动适配：缺失列 {filled} 已置空，不参与评分。")
+    rule_missing = [RULE_MAP[c]["name"] for c in filled if c in RULE_MAP]
+    other_missing = [c for c in filled if c not in RULE_MAP]
+    msg = "已自动适配：以下风险字段缺失，这些维度的风险将不参与评分，结果会系统性偏向低风险，请补全后重新上传或谨慎解读：" + "、".join(rule_missing)
+    if other_missing:
+        msg += f"。另缺非评分字段: {other_missing}"
+    st.warning(msg)
 st.dataframe(df.head(1000))
 st.write(f"共 {len(df)} 家店铺，正在分析…")
+
+# ---- 📋 数据诊断①：识别情况与缺失率（排查"为什么全是低风险"）----
+st.subheader("📋 数据诊断")
+diag_fields = list(RULE_MAP.keys())          # 12 个评分指标字段
+diag_found = [c for c in diag_fields if c not in filled]   # 原文件真正有的评分指标
+diag_missed = [c for c in diag_fields if c in filled]      # 原文件缺失、被补空的指标
+if diag_missed:
+    diag_names = "、".join(RULE_MAP[c]["name"] for c in diag_missed)
+    st.warning(f"未识别到 {len(diag_missed)} 个评分指标：{diag_names} → 这些维度不参与评分，结果会系统性偏向低风险。")
+else:
+    st.success("12 个评分指标全部识别成功。")
+miss_rows = []
+for c in diag_fields:
+    if c in df.columns:
+        na_pct = float(df[c].isna().mean() * 100)
+        miss_rows.append({"评分指标": RULE_MAP[c]["name"], "缺失率%": round(na_pct, 1)})
+st.write("各评分指标缺失率（>0 表示有店铺该指标取不到值，会跳过对应规则）：")
+st.dataframe(pd.DataFrame(miss_rows))
 
 rows = df.where(pd.notna(df), None).to_dict("records")
 p25, p75 = compute_quantiles(rows)
 results = []
 for r in rows:
-    score, hits = score_shop(r, p25, p75)
-    level = judge_level(score)
+    score, hits, missing, max_score = score_shop(r, p25, p75)
+    level = judge_level_full(score, len(missing), len(RULE_MAP))
     results.append({
         "seller_id": r["seller_id"],
         "总分": score,
+        "最大可得": max_score,
+        "缺失字段": "、".join(RULE_MAP[c]["name"] for c in missing) if missing else "无",
         "风险等级": level.value,
         "命中规则": build_hit_summary(hits),
         "风险原因": build_reason_text(hits),
@@ -86,6 +112,8 @@ def color_risk(val):
         return "background-color: #ffcccc; color: #cc0000"
     elif val == "中风险":
         return "background-color: #fff3cc; color: #cc8800"
+    elif val == "数据不完整":
+        return "background-color: #e0e0e0; color: #555555"
     else:
         return "background-color: #ccffcc; color: #008800"
 
@@ -94,6 +122,16 @@ result_df = pd.DataFrame(results)
 st.subheader("风险评估结果")
 st.dataframe(result_df.head(1000).style.map(color_risk, subset=["风险等级"]))
 st.write(f"共 {len(result_df)} 家店铺，上方仅显示前 1000 家，完整结果请下载 Excel。")
+
+# ---- 📋 数据诊断②：评分结果（0 分占比说明是否系统性偏低）----
+scores = result_df["总分"]
+zero_n = int((scores == 0).sum())
+st.write(f"评分诊断：{len(result_df)} 家中 {zero_n} 家（{zero_n / len(result_df) * 100:.0f}%）得 0 分（未命中任何规则）。")
+st.write(f"得分范围 {scores.min()} ~ {scores.max()}，平均 {scores.mean():.1f}（规则满分 {FULL_SCORE}）。")
+if zero_n / len(result_df) > 0.5:
+    st.warning("超过一半店铺得 0 分 → 很可能是上传文件的字段与评分指标不匹配（指标全缺失），请查看上面的「数据诊断①」缺失率表。")
+else:
+    st.info("0 分店铺占比正常，低风险结果来自真实打分。")
 
 lv_counts = result_df["风险等级"].value_counts().reset_index()
 lv_counts.columns = ["风险等级", "店铺数"]
@@ -110,10 +148,11 @@ st.download_button("📥 下载审计风险清单 Excel", buffer.getvalue(),
                    file_name="审计风险清单.xlsx",
                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-c1, c2, c3 = st.columns(3)
+c1, c2, c3, c4 = st.columns(4)
 c1.metric("高风险店铺", int((result_df["风险等级"] == "高风险").sum()))
 c2.metric("中风险店铺", int((result_df["风险等级"] == "中风险").sum()))
 c3.metric("低风险店铺", int((result_df["风险等级"] == "低风险").sum()))
+c4.metric("数据不完整", int((result_df["风险等级"] == "数据不完整").sum()))
 
 dist = alt.Chart(result_df).mark_bar().encode(
     alt.X("总分:Q", bin=True, title="风险得分"),
