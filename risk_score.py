@@ -19,6 +19,9 @@ from risk_rules import RULES, RULE_MAP
 # 参与分位数比较的指标
 QUANTILE_FIELDS = [r["id"] for r in RULES if r["mode"] in ("low_p25", "high_p75")]
 
+# 全部规则的理论满分（用于评估"缺字段导致的分数上限压缩"）
+FULL_SCORE = round(sum(r["score"] for r in RULES), 1)
+
 
 def compute_quantiles(rows, p_low=0.25, p_high=0.75):
     """
@@ -54,16 +57,23 @@ def _is_good(value, field, p25, p75):
 def score_shop(row, p25, p75):
     """
     对单家店铺打分。
-    返回: (总得分, hits)
-      hits = [ {dim, name, id, score, reason} for 命中的规则 ]
+    返回: (总得分, hits, missing, max_score)
+      hits      = [ {dim, name, id, score, reason} for 命中的规则 ]
+      missing   = 该店缺失(值为None/不在row中)的规则字段列表
+      max_score = 该店实际参与评分的字段"可触发的满分"（缺失字段不计入），
+                  用于判断"缺字段导致的分数上限压缩"
     """
     total = 0.0
     hits = []
+    missing = []
+    max_score = 0.0
     for rule in RULES:
         field = rule["id"]
         v = row.get(field)
-        if v is None:          # 缺失值(如无评价店铺)跳过，不误判
+        if v is None:          # 缺失值(如无评价店铺)跳过，不误判；同时记入缺失清单
+            missing.append(field)
             continue
+        max_score += rule["score"]
 
         hit = False
         if rule["mode"] == "low_p25":
@@ -86,7 +96,7 @@ def score_shop(row, p25, p75):
             # 反向修正：良好区间扣对应分值的50%
             if rule["mode"] != "abs" and _is_good(v, field, p25, p75):
                 total -= rule["score"] * 0.5
-    return round(total, 1), hits
+    return round(total, 1), hits, missing, round(max_score, 1)
 
 
 if __name__ == "__main__":
