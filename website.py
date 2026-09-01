@@ -48,12 +48,16 @@ st.markdown("本系统基于会计专业规则，对小微电商店铺进行财�
 st.divider()
 
 # ---- 数据来源：可选上传，不上传则使用云端仓库内置的示例数据 ----
+@st.cache_data(show_spinner=False)
+def load_builtin_data():
+    return pd.read_csv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "shop_data.csv"))
+
 uploaded = st.file_uploader("上传店铺数据 CSV（可选，不上传则分析内置示例数据）", type=["csv"])
 if uploaded is not None:
     df = pd.read_csv(uploaded)
     st.info("正在分析上传的数据。")
 else:
-    df = pd.read_csv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "shop_data.csv"))
+    df = load_builtin_data()
     st.info("未上传文件，正在分析内置示例数据（3095 家店铺）。")
 
 # ---- 以下为分析主流程（无论上传与否都执行）----
@@ -65,8 +69,8 @@ if filled:
     if other_missing:
         msg += f"。另缺非评分字段: {other_missing}"
     st.warning(msg)
-st.dataframe(df.head(1000))
-st.write(f"共 {len(df)} 家店铺，正在分析…")
+st.dataframe(df.head(200))
+st.write(f"共 {len(df)} 家店铺，正在分析…（上方仅预览前 200 行）")
 
 # ---- 📋 数据诊断①：识别情况与缺失率（排查"为什么全是低风险"）----
 st.subheader("📋 数据诊断")
@@ -120,8 +124,8 @@ def color_risk(val):
 
 result_df = pd.DataFrame(results)
 st.subheader("风险评估结果")
-st.dataframe(result_df.head(1000).style.map(color_risk, subset=["风险等级"]))
-st.write(f"共 {len(result_df)} 家店铺，上方仅显示前 1000 家，完整结果请下载 Excel。")
+st.dataframe(result_df.head(200).style.map(color_risk, subset=["风险等级"]))
+st.write(f"共 {len(result_df)} 家店铺，上方仅显示前 200 家，完整结果请下载 Excel。")
 
 # ---- 📋 数据诊断②：评分结果（0 分占比说明是否系统性偏低）----
 scores = result_df["总分"]
