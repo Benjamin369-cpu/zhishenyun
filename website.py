@@ -5,6 +5,59 @@ import altair as alt
 import io
 
 
+def color_risk(val):
+    """风险等级 -> 单元格底色/字色"""
+    if val == "高风险":
+        return "background-color: #ffcccc; color: #cc0000"
+    elif val == "中风险":
+        return "background-color: #fff3cc; color: #cc8800"
+    elif val == "数据不完整":
+        return "background-color: #e0e0e0; color: #555555"
+    else:
+        return "background-color: #ccffcc; color: #008800"
+
+
+def show_paginated_table(table_df, style_col=None, page_key="page", label="数据",
+                         page_size_key="page_size"):
+    """
+    带分页的表格展示：支持翻页浏览全部数据（不再只显示前 200 行）。
+    table_df : 要展示的完整 DataFrame
+    style_col: 需要按风险等级上色的列名（None 表示不上色）
+    page_key / page_size_key: 两个表用不同 key，互不干扰
+    """
+    # 记录当前页码（Streamlit 刷新后靠 session_state 记住）
+    if page_key not in st.session_state:
+        st.session_state[page_key] = 1
+    # 每页行数选择（20 / 50 / 100）
+    page_size = st.selectbox("每页显示行数", [20, 50, 100], index=1, key=page_size_key)
+    total = len(table_df)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    # 页码越界保护（比如删了数据后页码超出总页数）
+    if st.session_state[page_key] > total_pages:
+        st.session_state[page_key] = total_pages
+    start = (st.session_state[page_key] - 1) * page_size
+    end = min(start + page_size, total)
+    page_df = table_df.iloc[start:end]
+
+    # 展示当前页（结果表带风险等级颜色）
+    if style_col is not None:
+        st.dataframe(page_df.style.map(color_risk, subset=[style_col]))
+    else:
+        st.dataframe(page_df)
+
+    # 翻页控件：上一页 / 页码信息 / 下一页
+    c1, c2, c3 = st.columns([1, 3, 1])
+    if c1.button("上一页", key=page_key + "_prev"):
+        if st.session_state[page_key] > 1:
+            st.session_state[page_key] -= 1
+            st.rerun()
+    c2.markdown(f"**{label}：第 {st.session_state[page_key]} / {total_pages} 页（显示第 {start+1}-{end} 条 / 共 {total} 条）**")
+    if c3.button("下一页", key=page_key + "_next"):
+        if st.session_state[page_key] < total_pages:
+            st.session_state[page_key] += 1
+            st.rerun()
+
+
 def standardize_columns(df):
     ALIAS = {
         "seller_id": ["店铺id", "店铺ID", "卖家id", "seller", "shop_id"],
@@ -69,8 +122,8 @@ if filled:
     if other_missing:
         msg += f"。另缺非评分字段: {other_missing}"
     st.warning(msg)
-st.dataframe(df.head(200))
-st.write(f"共 {len(df)} 家店铺，正在分析…（上方仅预览前 200 行）")
+st.write(f"共 {len(df)} 家店铺，正在分析…（可翻页浏览全部数据）")
+show_paginated_table(df, style_col=None, page_key="raw_p", label="店铺原始数据", page_size_key="raw_ps")
 
 # ---- 📋 数据诊断①：识别情况与缺失率（排查"为什么全是低风险"）----
 st.subheader("📋 数据诊断")
@@ -111,21 +164,10 @@ if len(results) == 0:
     st.stop()
 
 
-def color_risk(val):
-    if val == "高风险":
-        return "background-color: #ffcccc; color: #cc0000"
-    elif val == "中风险":
-        return "background-color: #fff3cc; color: #cc8800"
-    elif val == "数据不完整":
-        return "background-color: #e0e0e0; color: #555555"
-    else:
-        return "background-color: #ccffcc; color: #008800"
-
-
 result_df = pd.DataFrame(results)
 st.subheader("风险评估结果")
-st.dataframe(result_df.head(200).style.map(color_risk, subset=["风险等级"]))
-st.write(f"共 {len(result_df)} 家店铺，上方仅显示前 200 家，完整结果请下载 Excel。")
+show_paginated_table(result_df, style_col="风险等级", page_key="res_p", label="风险评估结果", page_size_key="res_ps")
+st.write("完整结果可点击下方按钮下载 Excel。")
 
 # ---- 📋 数据诊断②：评分结果（0 分占比说明是否系统性偏低）----
 scores = result_df["总分"]
